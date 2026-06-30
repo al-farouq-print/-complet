@@ -219,9 +219,24 @@ body{font-family:'Tajawal',sans-serif;background:var(--dark);color:var(--light);
   <div id="lobby-host-btns" style="display:none">
     <div class="card" style="padding:15px">
       <div style="font-size:.85rem;color:rgba(255,255,255,.6);margin-bottom:10px">⚙️ إعدادات الجولة</div>
-      <div class="set-row">
+      <div class="set-row" style="flex-direction:column;align-items:stretch;gap:8px">
         <span class="set-lb">⏱️ الوقت</span>
-        <select class="sel" id="online-timer"><option value="30">30 ث</option><option value="45">45 ث</option><option value="60" selected>60 ث</option><option value="90">90 ث</option><option value="120">120 ث</option></select>
+        <select class="sel" id="online-timer-mode" onchange="toggleOnlineTimerMode()" style="width:100%">
+          <option value="preset">⏱️ وقت محدد</option>
+          <option value="custom">✏️ وقت مخصص (لحد 300 ث)</option>
+          <option value="none">♾️ بدون وقت</option>
+        </select>
+        <select class="sel" id="online-timer" style="width:100%">
+          <option value="30">30 ثانية</option>
+          <option value="45">45 ثانية</option>
+          <option value="60" selected>60 ثانية</option>
+          <option value="90">90 ثانية</option>
+          <option value="120">120 ثانية</option>
+          <option value="180">180 ثانية (3 دقايق)</option>
+          <option value="240">240 ثانية (4 دقايق)</option>
+          <option value="300">300 ثانية (5 دقايق)</option>
+        </select>
+        <input type="number" class="auth-inp" id="online-timer-custom" min="5" max="300" value="60" placeholder="اكتب عدد الثواني (5-300)" style="display:none;margin-bottom:0">
       </div>
       <div class="set-row" style="border:none">
         <span class="set-lb">🔢 الجولات</span>
@@ -352,7 +367,8 @@ body{font-family:'Tajawal',sans-serif;background:var(--dark);color:var(--light);
 <div class="set-row"><span class="set-lb">🔊 الصوت</span><div class="tog on" id="tog-snd" onclick="togSet('snd')"></div></div>
 <div class="set-row"><span class="set-lb">📳 الاهتزاز</span><div class="tog on" id="tog-vib" onclick="togSet('vib')"></div></div>
 <div class="set-row"><span class="set-lb">🤖 التصحيح الذكي</span><div class="tog on" id="tog-ai" onclick="togSet('ai')"></div></div>
-<div class="set-row"><span class="set-lb">⏱️ وقت كل جولة</span><select class="sel" id="sel-time" onchange="upTime()"><option value="30">30 ثانية</option><option value="45">45 ثانية</option><option value="60" selected>60 ثانية</option><option value="90">90 ثانية</option><option value="120">120 ثانية</option><option value="0">بدون وقت</option></select></div>
+<div class="set-row"><span class="set-lb">⏱️ وقت كل جولة</span><select class="sel" id="sel-time" onchange="upTime()"><option value="30">30 ثانية</option><option value="45">45 ثانية</option><option value="60" selected>60 ثانية</option><option value="90">90 ثانية</option><option value="120">120 ثانية</option><option value="180">180 ثانية</option><option value="240">240 ثانية</option><option value="300">300 ثانية</option><option value="custom">✏️ مخصص</option><option value="0">♾️ بدون وقت</option></select></div>
+<div class="set-row" id="custom-time-row" style="display:none"><span class="set-lb">عدد الثواني (5-300)</span><input type="number" class="sel" id="custom-time-inp" min="5" max="300" value="60" style="width:100px;text-align:center" oninput="upCustomTime()"></div>
 <div class="set-row"><span class="set-lb">🔢 عدد الجولات</span><select class="sel" id="sel-rounds" onchange="upRounds()"><option value="3">3 جولات</option><option value="5" selected>5 جولات</option><option value="7">7 جولات</option><option value="10">10 جولات</option></select></div>
 </div>
 <button class="btn btn-p" onclick="saveSet()">💾 حفظ</button>
@@ -602,6 +618,7 @@ function listenToRoom(code){
 }
 
 let lastRoomStatus='lobby';
+let roundLockedHandled=false;
 function handleRoomUpdate(room){
   const curSc=document.querySelector('.screen.on')?.id;
   // Update lobby
@@ -609,16 +626,23 @@ function handleRoomUpdate(room){
   // Game started
   if(room.status==='playing'&&lastRoomStatus==='lobby'){
     lastRoomStatus='playing';
+    roundLockedHandled=false;
     startOnlineRound(room);
   }
+  // SOMEONE WON THE ROUND - freeze everyone immediately
+  if(room.status==='round_locked'&&!roundLockedHandled&&curSc==='sc-game'){
+    roundLockedHandled=true;
+    lockRoundForEveryoneElse(room);
+  }
   // Round ended - show results
-  if(room.status==='round_results'&&lastRoomStatus==='playing'){
+  if(room.status==='round_results'&&(lastRoomStatus==='playing'||lastRoomStatus==='round_locked')){
     lastRoomStatus='round_results';
     showOnlineResults(room);
   }
   // Next round
   if(room.status==='playing'&&lastRoomStatus==='round_results'){
     lastRoomStatus='playing';
+    roundLockedHandled=false;
     startOnlineRound(room);
   }
   // Game over
@@ -628,6 +652,18 @@ function handleRoomUpdate(room){
   }
   // Update waiting screen
   if(curSc==='sc-waiting')renderWaiting(room);
+}
+
+async function lockRoundForEveryoneElse(room){
+  // If I'm the winner, I already handled my own submission in compRound flow
+  if(room.winnerUid===currentUser.uid)return;
+  if(GS.tInt){clearInterval(GS.tInt);GS.tInt=null}
+  // Disable all inputs visually
+  GS.cats.forEach((cat,i)=>{const inp=document.getElementById('ci-'+i);if(inp)inp.disabled=true});
+  const winnerName=room.winnerName||'لاعب آخر';
+  AudioEng.over();vib([150,80,150]);
+  toast('🚌 '+winnerName+' كومبليت! بنحسب نتيجتك...','error');
+  await forceSubmitOnLock();
 }
 
 function renderLobby(room){
@@ -650,10 +686,10 @@ window.startOnlineGame=async()=>{
   if(!isHost)return;
   const players=await get(ref(db,`rooms/${roomCode}/players`));
   if(!players.exists()||Object.keys(players.val()).length<2){toast('لازم لاعبين على الأقل!','error');return}
-  const timer=parseInt(document.getElementById('online-timer').value);
+  const timer=getOnlineTimerValue();
   const rounds=parseInt(document.getElementById('online-rounds').value);
   const letter=AR_LETTERS[Math.floor(Math.random()*AR_LETTERS.length)];
-  await update(ref(db,`rooms/${roomCode}`),{status:'playing',timer,rounds,currentRound:1,currentLetter:letter,roundAnswers:{},completedBy:null});
+  await update(ref(db,`rooms/${roomCode}`),{status:'playing',timer,rounds,currentRound:1,currentLetter:letter,roundAnswers:{},winnerUid:null,completedBy:null});
   toast('🎯 اللعبة بدأت!','success');
 };
 
@@ -679,7 +715,7 @@ function startOnlineRound(room){
   g.innerHTML=GS.cats.map((cat,i)=>`<div class="cat-row" id="row-${i}"><span class="cat-ic">${cat.ic}</span><span class="cat-lb">${cat.name}</span><input type="text" class="cat-in" id="ci-${i}" placeholder="يبدأ بـ ${GS.cl}..." autocomplete="off" oninput="checkInput(${i})"><span class="ai-st unk" id="ai-${i}">🤔</span></div>`).join('');
   setTimeout(()=>{const f=document.getElementById('ci-0');if(f)f.focus()},100);
   GS.tl=GS.timer;
-  document.getElementById('tm').textContent=GS.tl;
+  document.getElementById('tm').textContent=GS.timer>0?GS.tl:'∞';
   document.getElementById('tm').className='timer';
   if(GS.tInt)clearInterval(GS.tInt);
   if(GS.timer>0){
@@ -698,21 +734,54 @@ function startOnlineRound(room){
 
 async function autoSubmitOnline(){
   toast('⏰ الوقت خلص!','error');
-  await submitMyAnswers();
+  await submitMyAnswers(false);
 }
 
 window.compRound=async()=>{
   if(GS.tInt){clearInterval(GS.tInt);GS.tInt=null}
   AudioEng.comp();vib([100,50,100,50,200]);
-  document.getElementById('ov').classList.add('on');
-  setTimeout(async()=>{
-    document.getElementById('ov').classList.remove('on');
-    if(roomCode){await submitMyAnswers()}
-    else{collectAndScore()}
-  },2000);
+  if(roomCode){
+    // ONLINE: try to claim the win atomically
+    document.getElementById('ov').classList.add('on');
+    document.getElementById('ov').querySelector('.ov-t:last-child') && null;
+    const claimed=await claimWin();
+    setTimeout(()=>{
+      document.getElementById('ov').classList.remove('on');
+    },1200);
+    if(claimed){
+      // I won! submit my answers and mark as winner
+      await submitMyAnswers(true);
+    } else {
+      // Someone else already won — submit my partial answers as a loser
+      toast('🚌 حد سبقك! بنحسب نتيجتك...','error');
+      await submitMyAnswers(false);
+    }
+  } else {
+    document.getElementById('ov').classList.add('on');
+    setTimeout(()=>{
+      document.getElementById('ov').classList.remove('on');
+      collectAndScore();
+    },2000);
+  }
 };
 
-async function submitMyAnswers(){
+// Atomically claim the win for this round using Firebase transaction-like check
+async function claimWin(){
+  const snap=await get(ref(db,`rooms/${roomCode}`));
+  const room=snap.val();
+  if(!room)return false;
+  if(room.winnerUid){return false} // someone already won
+  // Try to set winnerUid - small race window, but Firebase RTDB writes are fast & sequential per-client
+  // Use a "claim" node with a transaction-style check-then-set
+  const winSnap=await get(ref(db,`rooms/${roomCode}/winnerUid`));
+  if(winSnap.exists()&&winSnap.val()){return false}
+  await update(ref(db,`rooms/${roomCode}`),{winnerUid:currentUser.uid,winnerName:currentUser.displayName||currentUser.email.split('@')[0],status:'round_locked'});
+  // Re-check we actually won (in case of race)
+  const confirmSnap=await get(ref(db,`rooms/${roomCode}/winnerUid`));
+  return confirmSnap.val()===currentUser.uid;
+}
+
+async function submitMyAnswers(iWon){
   const ans={};
   GS.cats.forEach((cat,i)=>{const inp=document.getElementById('ci-'+i);ans[cat.id]=inp?inp.value.trim():''});
   myAnswers=ans;
@@ -724,43 +793,38 @@ async function submitMyAnswers(){
     scored[cat.id]={val:ans[cat.id]||'',pts:res.points,status:res.status,msg:res.msg};
     myScore+=res.points;
   });
+  if(iWon)myScore+=10; // bonus for winning the round (being first)
   // Save to Firebase
   await update(ref(db,`rooms/${roomCode}/roundAnswers/${currentUser.uid}`),{
     name:currentUser.displayName||currentUser.email.split('@')[0],
     answers:scored,
     total:myScore,
+    won:!!iWon,
     submittedAt:Date.now()
   });
   // Update score
   const snap=await get(ref(db,`rooms/${roomCode}/players/${currentUser.uid}/score`));
   const prevScore=snap.val()||0;
   await update(ref(db,`rooms/${roomCode}/players/${currentUser.uid}`),{score:prevScore+myScore});
-  // Show waiting
-  showSc('sc-waiting');
-  document.getElementById('waiting-msg').textContent='بنستنى باقي اللاعبين...';
-  // Host checks if all submitted
-  if(isHost){checkAllSubmitted()}
+  if(iWon){
+    // Winner: move room to round_results immediately (don't wait for others)
+    if(isHost||true){ // any client can trigger this since they won
+      await update(ref(db,`rooms/${roomCode}`),{status:'round_results'});
+    }
+  } else {
+    // Loser: just wait, show waiting screen briefly then results will come via listener
+    showSc('sc-waiting');
+    document.getElementById('waiting-msg').textContent='🚌 حد سبقك! بنجهز النتايج...';
+  }
 }
 
-async function checkAllSubmitted(){
-  // Wait 1s then check
-  setTimeout(async()=>{
-    const [playersSnap,answersSnap]=await Promise.all([
-      get(ref(db,`rooms/${roomCode}/players`)),
-      get(ref(db,`rooms/${roomCode}/roundAnswers`))
-    ]);
-    if(!playersSnap.exists())return;
-    const players=playersSnap.val();
-    const answers=answersSnap.exists()?answersSnap.val():{};
-    const allDone=Object.keys(players).every(uid=>answers[uid]);
-    if(allDone){
-      await update(ref(db,`rooms/${roomCode}`),{status:'round_results'});
-    } else {
-      // Check again after 2s
-      setTimeout(()=>checkAllSubmitted(),2000);
-    }
-  },1000);
+// Forces a player to submit their CURRENT (possibly incomplete) answers when round is locked by a winner
+async function forceSubmitOnLock(){
+  if(myAnswers && myAnswers._submitted)return;
+  await submitMyAnswers(false);
 }
+
+
 
 function renderWaiting(room){
   const players=room.players||{};
@@ -783,9 +847,16 @@ function showOnlineResults(room){
   const letter=room.currentLetter||'؟';
   document.getElementById('onres-let').textContent=letter;
   let html='';
-  Object.values(answers).forEach(pd=>{
-    html+=`<div style="margin-bottom:20px;border:1px solid rgba(255,255,255,.1);border-radius:16px;padding:15px;background:rgba(255,255,255,.02)">`;
-    html+=`<div style="font-weight:700;color:var(--gold);margin-bottom:12px">👤 ${pd.name} — +${pd.total} نقطة</div>`;
+  // Sort: winner first, then by score
+  const arr=Object.values(answers).sort((a,b)=>{
+    if(a.won&&!b.won)return -1;
+    if(!a.won&&b.won)return 1;
+    return b.total-a.total;
+  });
+  arr.forEach(pd=>{
+    const isWinner=pd.won;
+    html+=`<div style="margin-bottom:20px;border:2px solid ${isWinner?'var(--gold)':'rgba(255,255,255,.1)'};border-radius:16px;padding:15px;background:${isWinner?'rgba(255,215,0,.08)':'rgba(255,255,255,.02)'}">`;
+    html+=`<div style="font-weight:700;color:${isWinner?'var(--gold)':'var(--light)'};margin-bottom:12px;display:flex;align-items:center;gap:8px">${isWinner?'🏆':'👤'} ${pd.name} ${isWinner?'<span style="font-size:.75rem;background:rgba(255,215,0,.2);padding:2px 10px;border-radius:10px">الفايز بالجولة +10 بونص</span>':''} <span style="margin-right:auto">+${pd.total} نقطة</span></div>`;
     GS.cats.forEach(cat=>{
       const a=(pd.answers||{})[cat.id]||{val:'',pts:0,status:'bad'};
       html+=`<div style="display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.03);padding:8px;border-radius:8px;margin-bottom:5px">
@@ -818,7 +889,7 @@ window.onlineNextRound=async()=>{
     await update(ref(db,`rooms/${roomCode}`),{status:'finished'});
   } else {
     const letter=AR_LETTERS[Math.floor(Math.random()*AR_LETTERS.length)];
-    await update(ref(db,`rooms/${roomCode}`),{status:'playing',currentRound:cr+1,currentLetter:letter,roundAnswers:{}});
+    await update(ref(db,`rooms/${roomCode}`),{status:'playing',currentRound:cr+1,currentLetter:letter,roundAnswers:{},winnerUid:null,winnerName:null});
   }
 };
 
@@ -846,7 +917,7 @@ window.resetG=()=>{document.getElementById('let-disp').textContent='؟';document
 window.setMode=(m)=>{GS.mode=m;document.querySelectorAll('.mode-b').forEach(b=>b.classList.remove('on'));document.getElementById('m-'+m).classList.add('on');if(m==='rand'){document.getElementById('sec-rand').style.display='block';document.getElementById('sec-man').style.display='none';if(GS.cl===''){document.getElementById('spin-b').style.display='block';document.getElementById('let-disp').textContent='؟'}}else{document.getElementById('sec-rand').style.display='none';document.getElementById('sec-man').style.display='block'}};
 window.spinL=()=>{AudioEng.init();AudioEng.spin();vib(50);const d=document.getElementById('let-disp');const b=document.getElementById('spin-b');b.disabled=true;b.style.opacity='0.5';let s=0;const iv=setInterval(()=>{d.textContent=AR_LETTERS[Math.floor(Math.random()*AR_LETTERS.length)];s++;if(s>=20){clearInterval(iv);const f=AR_LETTERS[Math.floor(Math.random()*AR_LETTERS.length)];GS.cl=f;d.textContent=f;AudioEng.reveal();vib([100,50,100]);setTimeout(()=>startRound(),500)}},100)};
 window.confMan=()=>{const inp=document.getElementById('man-l');const v=inp.value.trim();if(!v){toast('اكتب حرف!','error');return}const l=v[0];if(!AR_LETTERS.includes(l)){toast('حرف غير صحيح!','error');return}GS.cl=l;AudioEng.reveal();vib([100,50,100]);setTimeout(()=>startRound(),300)};
-function startRound(){document.getElementById('spin-b').style.display='none';document.getElementById('sec-rand').style.display='none';document.getElementById('sec-man').style.display='none';document.getElementById('tm-cont').style.display='block';document.getElementById('cat-card').style.display='block';document.getElementById('comp-cont').style.display='block';const g=document.getElementById('cat-grid');g.innerHTML=GS.cats.map((cat,i)=>`<div class="cat-row" id="row-${i}"><span class="cat-ic">${cat.ic}</span><span class="cat-lb">${cat.name}</span><input type="text" class="cat-in" id="ci-${i}" placeholder="يبدأ بـ ${GS.cl}..." autocomplete="off" oninput="checkInput(${i})"><span class="ai-st unk" id="ai-${i}">🤔</span></div>`).join('');setTimeout(()=>{const f=document.getElementById('ci-0');if(f)f.focus()},100);if(GS.timer>0){GS.tl=GS.timer;document.getElementById('tm').textContent=GS.tl;document.getElementById('tm').className='timer';GS.tInt=setInterval(()=>{GS.tl--;const t=document.getElementById('tm');t.textContent=GS.tl;if(GS.tl<=10){t.className='timer dg';AudioEng.warn();vib(30)}else if(GS.tl<=20){t.className='timer w';AudioEng.tick()}else AudioEng.tick();if(GS.tl<=0){clearInterval(GS.tInt);GS.tInt=null;timeUp()}},1000)}else{document.getElementById('tm').textContent='∞'}}
+function startRound(){document.getElementById('spin-b').style.display='none';document.getElementById('sec-rand').style.display='none';document.getElementById('sec-man').style.display='none';document.getElementById('tm-cont').style.display='block';document.getElementById('cat-card').style.display='block';document.getElementById('comp-cont').style.display='block';const g=document.getElementById('cat-grid');g.innerHTML=GS.cats.map((cat,i)=>`<div class="cat-row" id="row-${i}"><span class="cat-ic">${cat.ic}</span><span class="cat-lb">${cat.name}</span><input type="text" class="cat-in" id="ci-${i}" placeholder="يبدأ بـ ${GS.cl}..." autocomplete="off" oninput="checkInput(${i})"><span class="ai-st unk" id="ai-${i}">🤔</span></div>`).join('');setTimeout(()=>{const f=document.getElementById('ci-0');if(f)f.focus()},100);if(GS.timer>0){GS.tl=Math.min(GS.timer,300);document.getElementById('tm').textContent=GS.tl;document.getElementById('tm').className='timer';GS.tInt=setInterval(()=>{GS.tl--;const t=document.getElementById('tm');t.textContent=GS.tl;if(GS.tl<=10){t.className='timer dg';AudioEng.warn();vib(30)}else if(GS.tl<=20){t.className='timer w';AudioEng.tick()}else AudioEng.tick();if(GS.tl<=0){clearInterval(GS.tInt);GS.tInt=null;timeUp()}},1000)}else{document.getElementById('tm').textContent='∞'}}
 window.checkInput=(idx)=>{if(!GS.ai)return;const inp=document.getElementById('ci-'+idx);const val=inp.value.trim();const st=document.getElementById('ai-'+idx);const row=document.getElementById('row-'+idx);if(!val){st.textContent='🤔';st.className='ai-st unk';row.className='cat-row';return}const res=validateAnswer(val,GS.cats[idx].id,GS.cl);st.textContent=res.msg;st.className='ai-st '+res.status;row.className='cat-row '+res.status};
 function timeUp(){AudioEng.over();vib([200,100,200]);toast('⏰ الوقت خلص!','error');document.getElementById('comp-cont').style.display='none';setTimeout(()=>collectAndScore(),500)}
 function collectAndScore(){const ans={};GS.cats.forEach((cat,i)=>{const inp=document.getElementById('ci-'+i);ans[cat.id]=inp?inp.value.trim():''});GS.roundAns=ans;if(GS.ai){goAI()}else{goManual()}}
@@ -863,7 +934,29 @@ window.addP=()=>{AudioEng.click();const list=document.getElementById('p-list');c
 window.rmP=(btn)=>{AudioEng.click();const list=document.getElementById('p-list');if(list.children.length<=2){toast('لازم يكون فيه لاعبين على الأقل!','error');return}btn.parentElement.remove()};
 function upCatPrev(){const c=document.getElementById('cat-prev');c.innerHTML=GS.cats.map(cat=>'<span style="background:rgba(255,255,255,.08);padding:6px 12px;border-radius:20px;font-size:.85rem">'+cat.ic+' '+cat.name+'</span>').join('')}
 window.togSet=(s)=>{AudioEng.click();const t=document.getElementById('tog-'+s);t.classList.toggle('on');if(s==='snd'){GS.snd=t.classList.contains('on');if(GS.snd)AudioEng.init()}else if(s==='vib')GS.vib=t.classList.contains('on');else if(s==='ai')GS.ai=t.classList.contains('on')};
-window.upTime=()=>{GS.timer=parseInt(document.getElementById('sel-time').value)};
+window.upTime=()=>{
+  const v=document.getElementById('sel-time').value;
+  const row=document.getElementById('custom-time-row');
+  if(v==='custom'){row.style.display='flex';GS.timer=parseInt(document.getElementById('custom-time-inp').value)||60}
+  else{row.style.display='none';GS.timer=parseInt(v)}
+};
+window.upCustomTime=()=>{
+  let v=parseInt(document.getElementById('custom-time-inp').value)||60;
+  if(v>300)v=300; if(v<5)v=5;
+  document.getElementById('custom-time-inp').value=v;
+  GS.timer=v;
+};
+window.toggleOnlineTimerMode=()=>{
+  const mode=document.getElementById('online-timer-mode').value;
+  document.getElementById('online-timer').style.display=mode==='preset'?'block':'none';
+  document.getElementById('online-timer-custom').style.display=mode==='custom'?'block':'none';
+};
+function getOnlineTimerValue(){
+  const mode=document.getElementById('online-timer-mode').value;
+  if(mode==='none')return 0;
+  if(mode==='custom'){let v=parseInt(document.getElementById('online-timer-custom').value)||60;if(v>300)v=300;if(v<5)v=5;return v}
+  return parseInt(document.getElementById('online-timer').value);
+}
 window.upRounds=()=>{GS.tr=parseInt(document.getElementById('sel-rounds').value)};
 window.saveSet=()=>{AudioEng.click();toast('تم الحفظ!','success');goMenu()};
 
@@ -872,3 +965,18 @@ mkParts();
 </script>
 </body>
 </html>
+)=>{
+  let v=parseInt(document.getElementById('custom-time-inp').value)||60;
+  if(v>300)v=300; if(v<5)v=5;
+  document.getElementById('custom-time-inp').value=v;
+  GS.timer=v;
+};
+window.toggleOnlineTimerMode=()=>{
+  const mode=document.getElementById('online-timer-mode').value;
+  document.getElementById('online-timer').style.display=mode==='preset'?'block':'none';
+  document.getElementById('online-timer-custom').style.display=mode==='custom'?'block':'none';
+};
+function getOnlineTimerValue(){
+  const mode=document.getElementById('online-timer-mode').value;
+  if(mode==='none')return 0;
+  if(mode==='custom'){let v=parseInt(document.getElementById('online-timer-custom').value)||60;if(v>300)v=300;if(v<5)v=
